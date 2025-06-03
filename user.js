@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ServiceNow Table to CSV Copier
 // @namespace    http://tampermonkey.net/
-// @version      2.0
-// @description  Copy tables from ServiceNow as CSV or HTML with reliable clipboard support
+// @version      3.0
+// @description  Copy tables from ServiceNow as CSV or HTML with table navigation
 // @author       You
 // @match        https://*.service-now.com/*
 // @match        https://*.servicenow.com/*
@@ -17,11 +17,16 @@
         .sn-table-copier-highlight {
             outline: 3px solid #ff9800 !important;
             outline-offset: 2px !important;
-            cursor: pointer !important;
+            position: relative !important;
+        }
+        
+        .sn-table-copier-selected {
+            outline: 4px solid #2196F3 !important;
+            outline-offset: 3px !important;
         }
         
         .sn-table-copier-copied {
-            outline: 3px solid #4CAF50 !important;
+            outline: 4px solid #4CAF50 !important;
         }
         
         .sn-table-copier-panel {
@@ -36,7 +41,7 @@
             z-index: 10000;
             font-family: Arial, sans-serif;
             font-size: 14px;
-            min-width: 250px;
+            min-width: 280px;
         }
         
         .sn-table-copier-panel h3 {
@@ -63,8 +68,75 @@
             background: #45a049;
         }
         
+        .sn-table-copier-btn:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
+        
         .sn-table-copier-btn.active {
             background: #ff9800;
+        }
+        
+        .sn-table-navigation {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 10px 0;
+            padding: 10px;
+            background: #f5f5f5;
+            border-radius: 4px;
+        }
+        
+        .sn-nav-btn {
+            padding: 5px 10px;
+            background: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 20px;
+            line-height: 1;
+            min-width: 35px;
+        }
+        
+        .sn-nav-btn:hover:not(:disabled) {
+            background: #1976D2;
+        }
+        
+        .sn-nav-btn:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
+        
+        .sn-table-info {
+            flex: 1;
+            text-align: center;
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .sn-copy-btn {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            cursor: pointer;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+        
+        .sn-copy-btn:hover {
+            background: #45a049;
+            transform: scale(1.1);
+        }
+        
+        .sn-copy-btn:active {
+            transform: scale(0.95);
         }
         
         .sn-table-copier-toast {
@@ -152,12 +224,18 @@
             opacity: 0;
             pointer-events: none;
         }
+        
+        .sn-table-details {
+            font-size: 11px;
+            color: #666;
+            margin-top: 3px;
+        }
     `);
 
-    let autoMode = false;
     let panel = null;
-    let highlightedTable = null;
     let copyFormat = 'csv'; // Default to CSV
+    let detectedTables = [];
+    let selectedTableIndex = -1;
 
     // Create control panel
     function createPanel() {
@@ -173,29 +251,39 @@
                 <button id="sn-format-html">HTML</button>
             </div>
             <button class="sn-table-copier-btn" id="sn-detect-tables">Detect Tables</button>
-            <button class="sn-table-copier-btn" id="sn-auto-mode">Enable Auto Mode</button>
-            <button class="sn-table-copier-btn" id="sn-copy-first">Copy First Table</button>
+            <div id="sn-navigation-container" style="display: none;">
+                <div class="sn-table-navigation">
+                    <button class="sn-nav-btn" id="sn-prev-table" title="Previous table">‹</button>
+                    <div class="sn-table-info">
+                        <div id="sn-table-counter">No table selected</div>
+                        <div class="sn-table-details" id="sn-table-details"></div>
+                    </div>
+                    <button class="sn-nav-btn" id="sn-next-table" title="Next table">›</button>
+                    <button class="sn-copy-btn" id="sn-copy-selected" title="Copy selected table">📋</button>
+                </div>
+            </div>
             <div class="sn-table-copier-info" id="sn-info">
                 <strong>Shortcuts:</strong><br>
                 Alt+T: Toggle panel<br>
-                Alt+C: Copy highlighted<br>
-                Alt+A: Toggle auto mode<br>
-                Alt+F: Toggle format
+                Alt+C: Copy selected<br>
+                Alt+F: Toggle format<br>
+                ← →: Navigate tables
             </div>
-            <div id="sn-table-list"></div>
         `;
         
         document.body.appendChild(panel);
         
         // Add event listeners
         document.getElementById('sn-detect-tables').addEventListener('click', detectTables);
-        document.getElementById('sn-auto-mode').addEventListener('click', toggleAutoMode);
-        document.getElementById('sn-copy-first').addEventListener('click', copyFirstTable);
         document.getElementById('sn-format-csv').addEventListener('click', () => setFormat('csv'));
         document.getElementById('sn-format-html').addEventListener('click', () => setFormat('html'));
+        document.getElementById('sn-prev-table').addEventListener('click', () => navigateTable(-1));
+        document.getElementById('sn-next-table').addEventListener('click', () => navigateTable(1));
+        document.getElementById('sn-copy-selected').addEventListener('click', copySelectedTable);
         panel.querySelector('.sn-table-copier-close').addEventListener('click', () => {
             panel.remove();
             panel = null;
+            clearHighlights();
         });
     }
 
@@ -222,15 +310,13 @@
 
     // Reliable clipboard copy function
     function copyToClipboard(text) {
-        // Create a textarea element
         const textarea = document.createElement('textarea');
         textarea.className = 'sn-clipboard-helper';
         textarea.value = text;
         document.body.appendChild(textarea);
         
-        // Select and copy
         textarea.select();
-        textarea.setSelectionRange(0, 99999); // For mobile devices
+        textarea.setSelectionRange(0, 99999);
         
         try {
             const successful = document.execCommand('copy');
@@ -240,7 +326,6 @@
             return true;
         } catch (err) {
             console.error('Failed to copy:', err);
-            // Fallback: show the content in a prompt
             prompt('Copy failed. Please copy manually:', text);
             return false;
         } finally {
@@ -258,16 +343,10 @@
             const rowData = [];
             
             cells.forEach(cell => {
-                // Get text content and clean it up
                 let text = cell.textContent.trim();
-                
-                // Handle line breaks
                 text = text.replace(/\n/g, ' ');
-                
-                // Escape quotes
                 text = text.replace(/"/g, '""');
                 
-                // Wrap in quotes if contains comma, quote, or newline
                 if (text.includes(',') || text.includes('"') || text.includes('\n')) {
                     text = `"${text}"`;
                 }
@@ -295,8 +374,8 @@
                 index: index,
                 rows: table.querySelectorAll('tr').length,
                 cols: table.querySelector('tr') ? table.querySelector('tr').querySelectorAll('td, th').length : 0,
-                id: table.id,
-                className: table.className
+                id: table.id || '',
+                className: table.className || ''
             });
         });
         
@@ -311,8 +390,8 @@
                         index: index,
                         rows: table.querySelectorAll('tr').length,
                         cols: table.querySelector('tr') ? table.querySelector('tr').querySelectorAll('td, th').length : 0,
-                        id: table.id,
-                        className: table.className
+                        id: table.id || '',
+                        className: table.className || ''
                     });
                 });
             } catch (e) {
@@ -323,47 +402,94 @@
         return tables;
     }
 
-    // Detect and highlight tables
-    function detectTables() {
-        const tables = findAllTables();
+    // Clear all highlights
+    function clearHighlights() {
+        document.querySelectorAll('.sn-table-copier-highlight, .sn-table-copier-selected').forEach(table => {
+            table.classList.remove('sn-table-copier-highlight', 'sn-table-copier-selected');
+        });
+    }
+
+    // Highlight selected table
+    function highlightSelectedTable() {
+        clearHighlights();
         
-        if (tables.length === 0) {
+        if (selectedTableIndex >= 0 && selectedTableIndex < detectedTables.length) {
+            const table = detectedTables[selectedTableIndex].element;
+            table.classList.add('sn-table-copier-selected');
+            
+            // Scroll table into view
+            table.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            
+            // Update UI
+            updateNavigationUI();
+        }
+    }
+
+    // Update navigation UI
+    function updateNavigationUI() {
+        const counter = document.getElementById('sn-table-counter');
+        const details = document.getElementById('sn-table-details');
+        const prevBtn = document.getElementById('sn-prev-table');
+        const nextBtn = document.getElementById('sn-next-table');
+        
+        if (selectedTableIndex >= 0 && detectedTables.length > 0) {
+            const table = detectedTables[selectedTableIndex];
+            counter.textContent = `Table ${selectedTableIndex + 1} of ${detectedTables.length}`;
+            
+            let detailText = `${table.rows} rows × ${table.cols} cols`;
+            if (table.id) detailText += ` | ID: ${table.id}`;
+            if (table.frame !== 'main') detailText += ` | In ${table.frame}`;
+            details.textContent = detailText;
+            
+            prevBtn.disabled = selectedTableIndex === 0;
+            nextBtn.disabled = selectedTableIndex === detectedTables.length - 1;
+        } else {
+            counter.textContent = 'No table selected';
+            details.textContent = '';
+            prevBtn.disabled = true;
+            nextBtn.disabled = true;
+        }
+    }
+
+    // Navigate between tables
+    function navigateTable(direction) {
+        if (detectedTables.length === 0) return;
+        
+        selectedTableIndex += direction;
+        selectedTableIndex = Math.max(0, Math.min(selectedTableIndex, detectedTables.length - 1));
+        
+        highlightSelectedTable();
+    }
+
+    // Detect tables
+    function detectTables() {
+        detectedTables = findAllTables();
+        
+        if (detectedTables.length === 0) {
             showToast('No tables found!');
+            document.getElementById('sn-navigation-container').style.display = 'none';
             return;
         }
         
-        // Update info
-        const info = document.getElementById('sn-info');
-        info.innerHTML = `
-            <strong>Found ${tables.length} table(s)</strong><br>
-            Format: ${copyFormat.toUpperCase()}<br>
-            Click any highlighted table to copy<br>
-            <strong>Shortcuts:</strong><br>
-            Alt+C: Copy highlighted<br>
-            Alt+F: Toggle format
-        `;
+        // Show navigation
+        document.getElementById('sn-navigation-container').style.display = 'block';
         
-        // Highlight all tables
-        tables.forEach((tableInfo, index) => {
-            const table = tableInfo.element;
-            table.classList.add('sn-table-copier-highlight');
-            table.dataset.tableIndex = index;
-            
-            // Remove existing listeners
-            table.replaceWith(table.cloneNode(true));
-            const newTable = document.querySelectorAll('.sn-table-copier-highlight')[index];
-            
-            // Add click handler
-            newTable.addEventListener('click', function(e) {
-                if (newTable.classList.contains('sn-table-copier-highlight')) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    copyTable(newTable);
-                }
-            });
-        });
+        // Select first table
+        selectedTableIndex = 0;
+        highlightSelectedTable();
         
-        showToast(`Found ${tables.length} table(s) - Click any to copy as ${copyFormat.toUpperCase()}`);
+        showToast(`Found ${detectedTables.length} table(s)`);
+    }
+
+    // Copy selected table
+    function copySelectedTable() {
+        if (selectedTableIndex < 0 || selectedTableIndex >= detectedTables.length) {
+            showToast('No table selected!');
+            return;
+        }
+        
+        const table = detectedTables[selectedTableIndex].element;
+        copyTable(table);
     }
 
     // Copy table
@@ -394,73 +520,6 @@
         }
     }
 
-    // Copy first visible table
-    function copyFirstTable() {
-        const tables = findAllTables();
-        if (tables.length > 0) {
-            copyTable(tables[0].element);
-        } else {
-            showToast('No tables found!');
-        }
-    }
-
-    // Toggle auto mode
-    function toggleAutoMode() {
-        autoMode = !autoMode;
-        const btn = document.getElementById('sn-auto-mode');
-        
-        if (autoMode) {
-            btn.textContent = 'Disable Auto Mode';
-            btn.classList.add('active');
-            enableAutoMode();
-            showToast('Auto mode enabled - Hover to highlight, click to copy');
-        } else {
-            btn.textContent = 'Enable Auto Mode';
-            btn.classList.remove('active');
-            disableAutoMode();
-            showToast('Auto mode disabled');
-        }
-    }
-
-    // Enable auto mode
-    function enableAutoMode() {
-        document.addEventListener('mouseover', handleHover);
-    }
-
-    // Disable auto mode
-    function disableAutoMode() {
-        document.removeEventListener('mouseover', handleHover);
-        
-        // Remove all highlights
-        document.querySelectorAll('.sn-table-copier-highlight').forEach(table => {
-            table.classList.remove('sn-table-copier-highlight');
-        });
-    }
-
-    // Handle hover in auto mode
-    function handleHover(e) {
-        const table = e.target.closest('table');
-        
-        // Remove previous highlight
-        if (highlightedTable && highlightedTable !== table) {
-            highlightedTable.classList.remove('sn-table-copier-highlight');
-            highlightedTable.removeEventListener('click', handleAutoClick);
-        }
-        
-        if (table) {
-            table.classList.add('sn-table-copier-highlight');
-            table.addEventListener('click', handleAutoClick);
-            highlightedTable = table;
-        }
-    }
-
-    // Handle click in auto mode
-    function handleAutoClick(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        copyTable(this);
-    }
-
     // Keyboard shortcuts
     document.addEventListener('keydown', function(e) {
         // Alt+T: Toggle panel
@@ -469,30 +528,19 @@
             if (panel) {
                 panel.remove();
                 panel = null;
+                clearHighlights();
             } else {
                 createPanel();
             }
         }
         
-        // Alt+C: Copy highlighted table
+        // Alt+C: Copy selected table
         if (e.altKey && e.key === 'c') {
             e.preventDefault();
-            const highlighted = document.querySelector('.sn-table-copier-highlight');
-            if (highlighted) {
-                copyTable(highlighted);
+            if (panel && selectedTableIndex >= 0) {
+                copySelectedTable();
             } else {
-                showToast('No table highlighted!');
-            }
-        }
-        
-        // Alt+A: Toggle auto mode
-        if (e.altKey && e.key === 'a') {
-            e.preventDefault();
-            if (panel) {
-                toggleAutoMode();
-            } else {
-                createPanel();
-                toggleAutoMode();
+                showToast('No table selected!');
             }
         }
         
@@ -501,12 +549,23 @@
             e.preventDefault();
             setFormat(copyFormat === 'csv' ? 'html' : 'csv');
         }
+        
+        // Arrow keys for navigation (when panel is open)
+        if (panel && detectedTables.length > 0) {
+            if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                navigateTable(-1);
+            } else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                navigateTable(1);
+            }
+        }
     });
 
     // Auto-create panel on load
     setTimeout(() => {
         createPanel();
-        showToast('Table Copier loaded! Format: CSV (Alt+F to change)', 3000);
+        showToast('Table Copier loaded! Click "Detect Tables" to start', 3000);
     }, 1000);
 
 })();
