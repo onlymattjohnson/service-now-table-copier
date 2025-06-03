@@ -1,0 +1,22 @@
+# General ignores for development
+.DS_Store             # macOS specific file for folder customization
+Thumbs.db             # Windows specific file for thumbnail caches
+.idea/                # IntelliJ IDEA project files
+.vscode/              # VS Code settings and launch configurations
+*.sublime-project     # Sublime Text project files
+*.sublime-workspace   # Sublime Text workspace files
+npm-debug.log         # npm debug log
+
+# Build and distribution
+dist/                 # Directory for compiled or minified output
+build/                # Another common directory for build artifacts
+temp/                 # Temporary files
+tmp/                  # Another common directory for temporary files
+
+# Editor/OS specific backups
+*~                    # Emacs backup files
+*.bak                 # Generic backup files
+*.swp                 # Vim swap files
+*.swo                 # Vim swap files
+*.log                 # Log files
+.git/                 # Git's own directory (already ignored by default, but good to be explicit)
