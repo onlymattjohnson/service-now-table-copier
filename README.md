@@ -20,7 +20,7 @@ This is a Tampermonkey script. If you don't have Tampermonkey installed, you'll 
 2.  **Install the Script:**
     * Once Tampermonkey is installed, open the raw `.js` file of this script (e.g., from your GitHub repository).
     * Tampermonkey will usually detect the userscript and prompt you to install it. Click "Install."
-    * Alternatively, you can go to your Tampermonkey Dashboard, click the "Create a new script" icon (often a plus sign), and paste the entire code from `servicenow-table-extractor.user.js` into the editor, then save it.
+    * Alternatively, you can go to your Tampermonkey Dashboard, click the "Create a new script" icon (often a plus sign), and paste the entire code from `user.js` into the editor, then save it.
 
 ## 💡 Usage
 
