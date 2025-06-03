@@ -12,6 +12,13 @@
 (function() {
     'use strict';
 
+    // Only run UI in the top window, not in iframes
+    if (window.self !== window.top) return;
+
+    // Prevent multiple instances
+    if (window.snTableCopierLoaded) return;
+    window.snTableCopierLoaded = true;
+
     // Add styles
     GM_addStyle(`
         .sn-table-copier-highlight {
@@ -239,6 +246,12 @@
 
     // Create control panel
     function createPanel() {
+        // Remove any existing panel first
+        const existingPanel = document.querySelector('.sn-table-copier-panel');
+        if (existingPanel) {
+            existingPanel.remove();
+        }
+        
         if (panel) return;
         
         panel = document.createElement('div');
@@ -564,8 +577,11 @@
 
     // Auto-create panel on load
     setTimeout(() => {
-        createPanel();
-        showToast('Table Copier loaded! Click "Detect Tables" to start', 3000);
+        // Check if panel already exists
+        if (!document.querySelector('.sn-table-copier-panel')) {
+            createPanel();
+            showToast('Table Copier loaded! Click "Detect Tables" to start', 3000);
+        }
     }, 1000);
 
 })();
